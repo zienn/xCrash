@@ -104,12 +104,12 @@ struct xcd_dwarf
     uintptr_t                 load_bias;
     uintptr_t                 hdr_load_bias; //for .eh_frame_hdr
     xcd_dwarf_cie_tree_t      cie_cache;
-    
+
     xcd_memory_t             *memory;
     size_t                    memory_cur_offset;
     size_t                    memory_pc_offset;
     size_t                    memory_data_offset;
-    
+
     size_t                    pc_offset;
 
     //XCD_DWARF_TYPE_DEBUG_FRAME  mode: starting / ending offset of .debug_frame
@@ -132,6 +132,9 @@ struct xcd_dwarf
 #define DW_LOC_REGISTER       4
 #define DW_LOC_EXPRESSION     5
 #define DW_LOC_VAL_EXPRESSION 6
+#ifdef __aarch64__
+#define DW_LOC_PSEUDO_REGISTER 7
+#endif
 
 //location rule
 #define XCD_DWARF_REG_NUM 0xFFFF
@@ -208,7 +211,7 @@ static xcd_dwarf_cfa_t xcd_dwarf_cfa_table[64] = {
     /* 0x2a */ {1, {DW_EH_PE_omit,    DW_EH_PE_omit}},
     /* 0x2b */ {1, {DW_EH_PE_omit,    DW_EH_PE_omit}},
     /* 0x2c */ {1, {DW_EH_PE_omit,    DW_EH_PE_omit}},
-    /* 0x2d */ {1, {DW_EH_PE_omit,    DW_EH_PE_omit}},
+    /* 0x2d */ {0, {DW_EH_PE_omit,    DW_EH_PE_omit}},
     /* 0x2e */ {0, {DW_EH_PE_uleb128, DW_EH_PE_omit}},
     /* 0x2f */ {0, {DW_EH_PE_uleb128, DW_EH_PE_uleb128}},
     /* 0x30 */ {1, {DW_EH_PE_omit,    DW_EH_PE_omit}},
@@ -534,10 +537,10 @@ static uintptr_t xcd_dwarf_adjust_pc_from_fde(xcd_dwarf_t *self, size_t cur_fiel
 static int xcd_dwarf_read_bytes(xcd_dwarf_t *self, void *value, size_t size)
 {
     int r;
-    
+
     if(0 != (r = xcd_memory_read_fully(self->memory, self->memory_cur_offset, value, size))) return r;
     self->memory_cur_offset += size;
-    
+
     return 0;
 }
 
@@ -545,10 +548,10 @@ static int xcd_dwarf_read_uleb128(xcd_dwarf_t *self, uint64_t *value)
 {
     size_t i;
     int    r;
-    
+
     if(0 != (r = xcd_memory_read_uleb128(self->memory, self->memory_cur_offset, value, &i))) return r;
     self->memory_cur_offset += i;
-    
+
     return 0;
 }
 
@@ -559,7 +562,7 @@ static int xcd_dwarf_read_sleb128(xcd_dwarf_t *self, int64_t *value)
 
     if(0 != (r = xcd_memory_read_sleb128(self->memory, self->memory_cur_offset, value, &i))) return r;
     self->memory_cur_offset += i;
-    
+
     return 0;
 }
 
@@ -579,7 +582,7 @@ static int xcd_dwarf_read_encoded(xcd_dwarf_t *self, uint64_t *value, uint8_t en
     *value = 0;
 
     if(encoding == DW_EH_PE_omit) return 0;
-    
+
     if(encoding == DW_EH_PE_aligned)
     {
         //check overflow
@@ -675,16 +678,16 @@ static xcd_dwarf_cie_t *xcd_dwarf_get_cie_from_offset(xcd_dwarf_t *self, size_t 
     uint32_t         v32;
     uint64_t         v64;
     size_t           i;
-    
+
     self->memory_cur_offset = offset;
 
     //check cache
     if(NULL != (cie = RB_FIND(xcd_dwarf_cie_tree, &(self->cie_cache), &cie_key))) return cie;
-    
+
     //create cie
     if(NULL == (cie = calloc(1, sizeof(xcd_dwarf_cie_t)))) goto err;
     cie->offset = offset; //key
-    
+
     //get length
     if(0 != xcd_dwarf_read_bytes(self, &v32, 4)) goto err;
 
@@ -696,7 +699,7 @@ static xcd_dwarf_cie_t *xcd_dwarf_get_cie_from_offset(xcd_dwarf_t *self, size_t 
 
         cie->cfa_instructions_end = self->memory_cur_offset + (size_t)v64;
         cie->fde_address_encoding = DW_EH_PE_sdata8;
-        
+
         //get CIE ID
         if(0 != xcd_dwarf_read_bytes(self, &v64, 8)) goto err;
         if(!xcd_dwarf_is_cie_64(self, v64)) goto err; //not a CIE
@@ -705,7 +708,7 @@ static xcd_dwarf_cie_t *xcd_dwarf_get_cie_from_offset(xcd_dwarf_t *self, size_t 
     {
         cie->cfa_instructions_end = self->memory_cur_offset + (size_t)v32;
         cie->fde_address_encoding = DW_EH_PE_sdata4;
-        
+
         //get CIE ID
         if(0 != xcd_dwarf_read_bytes(self, &v32, 4)) goto err;
         if(!xcd_dwarf_is_cie_32(self, v32)) goto err; //not a CIE
@@ -728,7 +731,7 @@ static xcd_dwarf_cie_t *xcd_dwarf_get_cie_from_offset(xcd_dwarf_t *self, size_t 
     {
         //skip address size
         self->memory_cur_offset += 1;
-        
+
         //get segment size
         if(0 != xcd_dwarf_read_bytes(self, &(cie->segment_size), 1)) goto err;
     }
@@ -759,7 +762,7 @@ static xcd_dwarf_cie_t *xcd_dwarf_get_cie_from_offset(xcd_dwarf_t *self, size_t 
     {
         //get augmentation data length
         if(0 != xcd_dwarf_read_uleb128(self, &v64)) goto err;
-        
+
         cie->cfa_instructions_offset = self->memory_cur_offset + (size_t)v64;
 
         for(i = 1; i < sizeof(cie->augmentation_string); i++)
@@ -786,7 +789,7 @@ static xcd_dwarf_cie_t *xcd_dwarf_get_cie_from_offset(xcd_dwarf_t *self, size_t 
             }
         }
     }
-    
+
     RB_INSERT(xcd_dwarf_cie_tree, &(self->cie_cache), cie);
     return cie;
 
@@ -819,7 +822,7 @@ static xcd_dwarf_fde_t *xcd_dwarf_get_fde_from_offset(xcd_dwarf_t *self, size_t 
 
     //get length
     if(0 != xcd_dwarf_read_bytes(self, &v32, 4)) goto end;
-    
+
     if((uint32_t)(-1) == v32) //64bits DWARF FDE
     {
         //get extended length
@@ -837,7 +840,7 @@ static xcd_dwarf_fde_t *xcd_dwarf_get_fde_from_offset(xcd_dwarf_t *self, size_t 
     else //32bits DWARF FDE
     {
         cfa_instructions_end = self->memory_cur_offset + (size_t)v32;
-        
+
         //get CIE offset
         cur_field_offset = self->memory_cur_offset;
         if(0 != xcd_dwarf_read_bytes(self, &v32, 4)) goto end;
@@ -930,7 +933,7 @@ static int xcd_dwarf_get_fde_offset_from_pc(xcd_dwarf_t *self, uintptr_t pc, siz
         if(0 != (r = xcd_dwarf_read_encoded(self, &v64, self->eh_frame_hdr_table_encoding))) return r;
         cur_pc = (uintptr_t)v64;
         if(is_rel_encoded) cur_pc += self->hdr_load_bias;
-        
+
         if(pc == cur_pc)
         {
             //get fde offset
@@ -944,7 +947,7 @@ static int xcd_dwarf_get_fde_offset_from_pc(xcd_dwarf_t *self, uintptr_t pc, siz
         else
             first = cur + 1;
     }
-    
+
     if(last != 0)
     {
         //get fde offset
@@ -954,7 +957,7 @@ static int xcd_dwarf_get_fde_offset_from_pc(xcd_dwarf_t *self, uintptr_t pc, siz
         *fde_offset = (size_t)v64;
         return 0;
     }
-    
+
     return XCC_ERRNO_NOTFND;
 }
 
@@ -987,14 +990,14 @@ static xcd_dwarf_fde_t *xcd_dwarf_get_fde(xcd_dwarf_t *self, uintptr_t pc)
 static xcd_dwarf_loc_t *xcd_dwarf_get_loc(xcd_dwarf_t *self, xcd_dwarf_fde_t *fde, uintptr_t pc)
 {
     xcd_dwarf_loc_t *loc = NULL, *loc_init = NULL, *loc_pc = NULL;
-    
+
     size_t cie_instr_start = (size_t)fde->cie->cfa_instructions_offset;
     size_t cie_instr_end = (size_t)fde->cie->cfa_instructions_end;
     size_t fde_instr_start = (size_t)fde->cfa_instructions_offset;
     size_t fde_instr_end = (size_t)fde->cfa_instructions_end;
-    
+
     uintptr_t cur_pc = fde->pc_start;
-    
+
     uint8_t  v8, cfa_op, cfa_op_ext;
     uint64_t v64;
     size_t   i;
@@ -1010,11 +1013,11 @@ static xcd_dwarf_loc_t *xcd_dwarf_get_loc(xcd_dwarf_t *self, xcd_dwarf_fde_t *fd
 
     if(NULL == (loc_init = calloc(1, sizeof(xcd_dwarf_loc_t)))) return NULL;
     loc = loc_init;
-    
+
     while(1)
     {
         if(cur_pc > pc) break; //have stepped to the LOC
-        
+
         if(loc == loc_init)
         {
             if(self->memory_cur_offset >= cie_instr_end)
@@ -1036,7 +1039,7 @@ static xcd_dwarf_loc_t *xcd_dwarf_get_loc(xcd_dwarf_t *self, xcd_dwarf_fde_t *fd
                 break; //no more instructions
             }
         }
-        
+
         if(0 != xcd_dwarf_read_bytes(self, &v8, 1)) goto err;
         cfa_op = v8 >> 6;
         cfa_op_ext = v8 & 0x3f;
@@ -1181,6 +1184,18 @@ static xcd_dwarf_loc_t *xcd_dwarf_get_loc(xcd_dwarf_t *self, xcd_dwarf_fde_t *fd
                 loc->reg_rules[operands[0]].values[0] = operands[1]; //expression length
                 loc->reg_rules[operands[0]].values[1] = self->memory_cur_offset; //expression end
                 break;
+#if defined(__aarch64__)
+            case 0x2d: // DW_CFA_AARCH64_negate_ra_state
+                // Toggle the RA_SIGN_STATE for AArch64 PAC (Pointer Authentication Code)
+                // This pseudo-register should be initialized to 0 per DWARF specification
+                if (loc->reg_rules[XCD_REGS_RA_SIGN_STATE].type != DW_LOC_PSEUDO_REGISTER) {
+                    loc->reg_rules[XCD_REGS_RA_SIGN_STATE].type = DW_LOC_PSEUDO_REGISTER;
+                    loc->reg_rules[XCD_REGS_RA_SIGN_STATE].values[0] = 1; // Initialize to 1 per DWARF spec
+                } else {
+                    loc->reg_rules[XCD_REGS_RA_SIGN_STATE].values[0] ^= 1; // Toggle between 0 and 1
+                }
+                break;
+#endif
             case 0x2e: //DW_CFA_GNU_args_size
                 break;
             case 0x2f: //DW_CFA_GNU_negative_offset_extended
@@ -1203,7 +1218,7 @@ static xcd_dwarf_loc_t *xcd_dwarf_get_loc(xcd_dwarf_t *self, xcd_dwarf_fde_t *fd
     }
     if(loc == loc_pc && NULL != loc_init) free(loc_init);
     return loc;
-    
+
  err:
     if(NULL != loc_init)
     {
@@ -1249,7 +1264,7 @@ static int xcd_dwarf_eval_expression(xcd_dwarf_t *self, xcd_regs_t *regs, size_t
     while(self->memory_cur_offset < end)
     {
         if(j++ > 1000) return XCC_ERRNO_RANGE;
-            
+
         //read operation code
         if(0 != (r = xcd_dwarf_read_bytes(self, &op_code, 1))) return r;
 
@@ -1273,7 +1288,7 @@ static int xcd_dwarf_eval_expression(xcd_dwarf_t *self, xcd_regs_t *regs, size_t
                 operands[i] = (uintptr_t)vu64;
             }
         }
-        
+
         //do operation
         switch(op_code)
         {
@@ -1522,7 +1537,7 @@ static int xcd_dwarf_eval_expression(xcd_dwarf_t *self, xcd_regs_t *regs, size_t
     return 0;
 }
 #pragma clang diagnostic pop
-    
+
 static int xcd_dwarf_eval(xcd_dwarf_t *self, xcd_dwarf_fde_t *fde, xcd_dwarf_loc_t *loc, xcd_regs_t *regs, int *finished)
 {
     int        r;
@@ -1577,6 +1592,17 @@ static int xcd_dwarf_eval(xcd_dwarf_t *self, xcd_dwarf_fde_t *fde, xcd_dwarf_loc
             if(i == fde->cie->return_address_register)
                 return_address_undefined = 1;
             break;
+#if defined(__aarch64__)
+        case DW_LOC_PSEUDO_REGISTER:
+            // Handle pseudo-registers, especially for ARM64 PAC state
+            if (i == XCD_REGS_RA_SIGN_STATE) {
+                // Set the PAC state register
+                if (regs != NULL) {
+                    xcd_regs_set_pseudo_reg(regs, i, loc->reg_rules[i].values[0]);
+                }
+            }
+        break;
+#endif
         default:
             break;
         }
@@ -1585,7 +1611,7 @@ static int xcd_dwarf_eval(xcd_dwarf_t *self, xcd_dwarf_fde_t *fde, xcd_dwarf_loc
     //step PC and SP
     xcd_regs_set_pc(regs, return_address_undefined ? 0 : regs->r[fde->cie->return_address_register]);
     xcd_regs_set_sp(regs, cfa);
-    
+
     //if the pc was set to zero, consider this the final frame
     *finished = (0 == xcd_regs_get_pc(regs) ? 1 : 0);
 
@@ -1645,7 +1671,7 @@ static int xcd_dwarf_init_eh_frame_hdr(xcd_dwarf_t *self)
     default:
         return XCC_ERRNO_FORMAT; //using .eh_frame for linear search
     }
-    
+
     //skip .eh_frame ptr
     self->memory_pc_offset = self->memory_cur_offset;
     if(0 != (r = xcd_dwarf_read_encoded(self, &v64, ptr_encoding))) return r;
@@ -1658,7 +1684,7 @@ static int xcd_dwarf_init_eh_frame_hdr(xcd_dwarf_t *self)
 
     //set entries_offset to the start of binary search table
     self->entries_offset = self->memory_cur_offset;
-    
+
     return 0;
 }
 
@@ -1666,7 +1692,7 @@ int xcd_dwarf_create(xcd_dwarf_t **self, xcd_memory_t *memory, pid_t pid, uintpt
                      size_t offset, size_t size, xcd_dwarf_type_t type)
 {
     int r = 0;
-    
+
     if(NULL == (*self = calloc(1, sizeof(xcd_dwarf_t)))) return XCC_ERRNO_NOMEM;
     (*self)->type = type;
     (*self)->pid = pid;
@@ -1713,7 +1739,7 @@ int xcd_dwarf_step(xcd_dwarf_t *self, xcd_regs_t *regs, uintptr_t pc, int *finis
 #endif
         goto end;
     }
-    
+
     //find LOCATION in the FDE from PC
     if(NULL == (loc = xcd_dwarf_get_loc(self, fde, pc)))
     {

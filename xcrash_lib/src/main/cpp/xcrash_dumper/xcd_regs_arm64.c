@@ -118,6 +118,18 @@ uintptr_t xcd_regs_get_pc(xcd_regs_t *self)
 
 void xcd_regs_set_pc(xcd_regs_t *self, uintptr_t pc)
 {
+    if ((0 != pc) && xcd_regs_is_ra_signed(self)) {
+        if (self->pac_mask) {
+            // Remove the PAC signature using a mask
+            pc &= ~self->pac_mask;
+        } else {
+            // Use the XPACLRI to clear the PAC signature.
+            register uint64_t x30 __asm__("x30") = pc;
+            // XPACLRI - hint 0x7
+            __asm__ __volatile__("hint 0x7" : "+r"(x30));
+            pc = x30;
+        }
+    }
     self->r[XCD_REGS_PC] = pc;
 }
 
@@ -213,7 +225,7 @@ int xcd_regs_try_step_sigreturn(xcd_regs_t *self, uintptr_t rel_pc, xcd_memory_t
     // SP + sizeof(siginfo_t) + uc_mcontext offset + X0 offset.
     offset = self->r[XCD_REGS_SP] + 0x80 + 0xb0 + 0x08;
     if(0 != xcd_util_ptrace_read_fully(pid, offset, self, sizeof(uint64_t) * XCD_REGS_MACHINE_NUM)) return XCC_ERRNO_MEM;
-    
+
     return 0;
 }
 
@@ -234,6 +246,34 @@ int xcd_regs_set_pc_from_lr(xcd_regs_t *self, pid_t pid)
 
     self->r[XCD_REGS_PC] = self->r[XCD_REGS_LR];
     return 0;
+}
+
+// Set the PAC mask
+void xcd_regs_set_pac_mask(xcd_regs_t *self, uint64_t mask) {
+    self->pac_mask = mask;
+}
+
+// Get the value of a pseudo-register
+int xcd_regs_get_pseudo_reg(xcd_regs_t *self, size_t reg_num, uintptr_t *value) {
+    if (reg_num >= XCD_REGS_PSEUDO_FIRST && reg_num < XCD_REGS_PSEUDO_LAST) {
+        *value = self->pseudo_regs[reg_num - XCD_REGS_PSEUDO_FIRST];
+        return 0;
+    }
+    return XCC_ERRNO_NOTFND;
+}
+
+// Set the value of a pseudo-register
+int xcd_regs_set_pseudo_reg(xcd_regs_t *self, size_t reg_num, uintptr_t value) {
+    if (reg_num >= XCD_REGS_PSEUDO_FIRST && reg_num < XCD_REGS_PSEUDO_LAST) {
+        self->pseudo_regs[reg_num - XCD_REGS_PSEUDO_FIRST] = value;
+        return 0;
+    }
+    return XCC_ERRNO_NOTFND;
+}
+
+// Check if the RA is signed
+int xcd_regs_is_ra_signed(xcd_regs_t *self) {
+    return self->pseudo_regs[XCD_REGS_RA_SIGN_STATE - XCD_REGS_PSEUDO_FIRST] != 0;
 }
 
 #endif

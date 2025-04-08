@@ -38,7 +38,11 @@ extern "C" {
 #define XCD_REGS_MACHINE_NUM 16
 #elif defined(__aarch64__)
 #define XCD_REGS_USER_NUM    34
-#define XCD_REGS_MACHINE_NUM 33
+#define XCD_REGS_MACHINE_NUM 35
+// pseduo register
+#define XCD_REGS_RA_SIGN_STATE 34  // RA_SIGN_STATE
+#define XCD_REGS_PSEUDO_FIRST 34
+#define XCD_REGS_PSEUDO_LAST 35
 #elif defined(__i386__)
 #define XCD_REGS_USER_NUM    17
 #define XCD_REGS_MACHINE_NUM 16
@@ -51,6 +55,10 @@ extern "C" {
 #pragma clang diagnostic ignored "-Wpadded"
 typedef struct {
     uintptr_t r[XCD_REGS_USER_NUM];
+#if defined(__aarch64__)
+    uintptr_t pseudo_regs[XCD_REGS_PSEUDO_LAST - XCD_REGS_PSEUDO_FIRST];
+    uint64_t pac_mask;
+#endif
 } xcd_regs_t;
 #pragma clang diagnostic pop
 
@@ -81,6 +89,13 @@ uintptr_t xcd_regs_get_adjust_pc(uintptr_t rel_pc, uintptr_t load_bias, xcd_memo
 
 int xcd_regs_set_pc_from_lr(xcd_regs_t *self, pid_t pid);
 
+int xcd_regs_set_pseudo_reg(xcd_regs_t *self, size_t reg_num, uintptr_t value);
+
+void xcd_regs_set_pac_mask(xcd_regs_t *self, uint64_t mask);
+
+int xcd_regs_get_pseudo_reg(xcd_regs_t *self, size_t reg_num, uintptr_t *value);
+
+int xcd_regs_is_ra_signed(xcd_regs_t *self);
 #ifdef __cplusplus
 }
 #endif
